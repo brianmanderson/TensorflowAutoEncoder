@@ -351,6 +351,21 @@ class ReconstructPatches3D(Layer):
         super().__init__(**kwargs)
         if isinstance(size, int):
             size = (size, size, size)
+        if len(size) != 3:
+            raise ValueError(
+                f"`size` must be an int or a tuple of length 3. "
+                f"Received: size={size}"
+            )
+        if len(output_size) != 3:
+            raise ValueError(
+                f"`output_size` must be a tuple of length 3 (D, H, W). "
+                f"Received: output_size={output_size}"
+            )
+        if padding not in ("same", "valid"):
+            raise ValueError(
+                f"`padding` must be 'same' or 'valid'. "
+                f"Received: padding={padding}"
+            )
         self.size = tuple(size)
         self.output_size = tuple(output_size)
         self.strides = strides
@@ -422,6 +437,21 @@ class ReconstructPatches2D(Layer):
         super().__init__(**kwargs)
         if isinstance(size, int):
             size = (size, size)
+        if len(size) != 2:
+            raise ValueError(
+                f"`size` must be an int or a tuple of length 2. "
+                f"Received: size={size}"
+            )
+        if len(output_size) != 2:
+            raise ValueError(
+                f"`output_size` must be a tuple of length 2 (H, W). "
+                f"Received: output_size={output_size}"
+            )
+        if padding not in ("same", "valid"):
+            raise ValueError(
+                f"`padding` must be 'same' or 'valid'. "
+                f"Received: padding={padding}"
+            )
         self.size = tuple(size)
         self.output_size = tuple(output_size)
         self.strides = strides
