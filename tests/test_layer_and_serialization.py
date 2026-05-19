@@ -330,15 +330,27 @@ def test_3d_output_size_auto_infer_valid():
     np.testing.assert_allclose(ops.convert_to_numpy(recon), x, atol=1e-6)
 
 
-def test_output_size_none_with_same_rejected_2d():
-    """Auto-infer is only valid for padding='valid', not 'same'."""
-    with pytest.raises(ValueError, match="auto-infer.*padding='valid'"):
-        ReconstructPatches2D(size=(4, 4), padding="same")
+def test_output_size_none_with_same_padding_requires_reference_2d():
+    """output_size=None + padding='same' is legal at init (caller is expected
+    to pass [patches, reference] at call time to derive output_size dynamically;
+    see test_dynamic_output_size.py for that path). Single-input call without
+    output_size set would error at call time, not init."""
+    # Should not raise at construction.
+    layer = ReconstructPatches2D(size=(4, 4), padding="same")
+    assert layer.output_size is None
+    # Calling without a reference (single input) and no static output_size
+    # is an error at call time (None is unpackable but the math fails).
+    x = ops.convert_to_tensor(np.zeros((1, 4, 4, 48), dtype="float32"))
+    with pytest.raises((TypeError, ValueError)):
+        layer(x)
 
 
-def test_output_size_none_with_same_rejected_3d():
-    with pytest.raises(ValueError, match="auto-infer.*padding='valid'"):
-        ReconstructPatches3D(size=(4, 4, 4), padding="same")
+def test_output_size_none_with_same_padding_requires_reference_3d():
+    layer = ReconstructPatches3D(size=(4, 4, 4), padding="same")
+    assert layer.output_size is None
+    x = ops.convert_to_tensor(np.zeros((1, 4, 4, 4, 128), dtype="float32"))
+    with pytest.raises((TypeError, ValueError)):
+        layer(x)
 
 
 def test_compute_output_shape_auto_infer():

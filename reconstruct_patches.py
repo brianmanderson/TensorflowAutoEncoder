@@ -895,12 +895,13 @@ class ReconstructPatches3D(Layer):
                 f"Received: size={size}"
             )
         if output_size is None:
-            if padding != "valid":
-                raise ValueError(
-                    "`output_size=None` (auto-infer) is only supported for "
-                    "padding='valid'. For padding='same' the original size "
-                    "is ambiguous from patches alone."
-                )
+            # `output_size=None` is legal in two modes:
+            # 1. padding='valid' — output_size is inferred from patches shape
+            #    at call time (deterministic for valid).
+            # 2. dual-input call(): user passes [patches, reference] at
+            #    call time and output_size is derived from reference's shape.
+            # Both cases are handled in call(); no error here.
+            pass
         elif len(output_size) != 3:
             raise ValueError(
                 f"`output_size` must be a tuple of length 3 (D, H, W). "
@@ -924,11 +925,32 @@ class ReconstructPatches3D(Layer):
         self.data_format = backend.standardize_data_format(data_format)
         self.reduction = reduction
 
-    def call(self, patches):
+    def call(self, inputs):
+        # Dual-input mode: [patches, reference_tensor]. Uses ops.shape(reference)
+        # at call time to derive output_size, enabling drop-in replacement for
+        # the original ReconstructVolumePatchesLayer pattern from variable-input
+        # models declared with Input(shape=[None,None,None,C]).
+        if isinstance(inputs, (list, tuple)):
+            if len(inputs) != 2:
+                raise ValueError(
+                    "ReconstructPatches3D called with a list expects exactly "
+                    f"[patches, reference], got list of length {len(inputs)}."
+                )
+            patches, reference = inputs
+            ref_shape = ops.shape(reference)
+            if self.data_format == "channels_last":
+                # batched (B, D, H, W, C): spatial at axes 1, 2, 3
+                output_size = (ref_shape[1], ref_shape[2], ref_shape[3])
+            else:
+                # batched (B, C, D, H, W): spatial at axes 2, 3, 4
+                output_size = (ref_shape[2], ref_shape[3], ref_shape[4])
+        else:
+            patches = inputs
+            output_size = self.output_size
         return reconstruct_patches_3d(
             patches,
             size=self.size,
-            output_size=self.output_size,
+            output_size=output_size,
             strides=self.strides,
             padding=self.padding,
             data_format=self.data_format,
@@ -937,8 +959,16 @@ class ReconstructPatches3D(Layer):
 
     def compute_output_shape(self, input_shape):
         patch_volume = self.size[0] * self.size[1] * self.size[2]
-        # Resolve output_size (may be auto-inferred for valid padding).
-        if self.output_size is not None:
+        # Dual-input: input_shape is [patches_shape, reference_shape].
+        if isinstance(input_shape, list) and len(input_shape) == 2:
+            patches_shape, ref_shape = input_shape
+            # Use reference's spatial dims as output_size (may have Nones).
+            if self.data_format == "channels_last":
+                output_size = tuple(ref_shape[1:4])
+            else:
+                output_size = tuple(ref_shape[2:5])
+            input_shape = patches_shape  # for the rest of the computation
+        elif self.output_size is not None:
             output_size = self.output_size
         else:
             output_size = self._infer_output_size_from_shape(input_shape)
@@ -946,18 +976,18 @@ class ReconstructPatches3D(Layer):
             flat = input_shape[-1]
             channels = None if flat is None else flat // patch_volume
             if len(input_shape) == 5:
-                return (input_shape[0],) + output_size + (channels,)
+                return (input_shape[0],) + tuple(output_size) + (channels,)
             elif len(input_shape) == 4:
-                return output_size + (channels,)
+                return tuple(output_size) + (channels,)
         else:
             if len(input_shape) == 5:
                 flat = input_shape[1]
                 channels = None if flat is None else flat // patch_volume
-                return (input_shape[0], channels) + output_size
+                return (input_shape[0], channels) + tuple(output_size)
             elif len(input_shape) == 4:
                 flat = input_shape[0]
                 channels = None if flat is None else flat // patch_volume
-                return (channels,) + output_size
+                return (channels,) + tuple(output_size)
         raise ValueError(
             f"Unexpected patches rank for ReconstructPatches3D: "
             f"{len(input_shape)}"
@@ -1015,12 +1045,8 @@ class ReconstructPatches2D(Layer):
                 f"Received: size={size}"
             )
         if output_size is None:
-            if padding != "valid":
-                raise ValueError(
-                    "`output_size=None` (auto-infer) is only supported for "
-                    "padding='valid'. For padding='same' the original size "
-                    "is ambiguous from patches alone."
-                )
+            # See ReconstructPatches3D for the two legal output_size=None modes.
+            pass
         elif len(output_size) != 2:
             raise ValueError(
                 f"`output_size` must be a tuple of length 2 (H, W). "
@@ -1044,11 +1070,26 @@ class ReconstructPatches2D(Layer):
         self.data_format = backend.standardize_data_format(data_format)
         self.reduction = reduction
 
-    def call(self, patches):
+    def call(self, inputs):
+        if isinstance(inputs, (list, tuple)):
+            if len(inputs) != 2:
+                raise ValueError(
+                    "ReconstructPatches2D called with a list expects exactly "
+                    f"[patches, reference], got list of length {len(inputs)}."
+                )
+            patches, reference = inputs
+            ref_shape = ops.shape(reference)
+            if self.data_format == "channels_last":
+                output_size = (ref_shape[1], ref_shape[2])
+            else:
+                output_size = (ref_shape[2], ref_shape[3])
+        else:
+            patches = inputs
+            output_size = self.output_size
         return reconstruct_patches(
             patches,
             size=self.size,
-            output_size=self.output_size,
+            output_size=output_size,
             strides=self.strides,
             padding=self.padding,
             data_format=self.data_format,
@@ -1057,7 +1098,14 @@ class ReconstructPatches2D(Layer):
 
     def compute_output_shape(self, input_shape):
         patch_volume = self.size[0] * self.size[1]
-        if self.output_size is not None:
+        if isinstance(input_shape, list) and len(input_shape) == 2:
+            patches_shape, ref_shape = input_shape
+            if self.data_format == "channels_last":
+                output_size = tuple(ref_shape[1:3])
+            else:
+                output_size = tuple(ref_shape[2:4])
+            input_shape = patches_shape
+        elif self.output_size is not None:
             output_size = self.output_size
         else:
             output_size = self._infer_output_size_from_shape(input_shape)
@@ -1065,18 +1113,18 @@ class ReconstructPatches2D(Layer):
             flat = input_shape[-1]
             channels = None if flat is None else flat // patch_volume
             if len(input_shape) == 4:
-                return (input_shape[0],) + output_size + (channels,)
+                return (input_shape[0],) + tuple(output_size) + (channels,)
             elif len(input_shape) == 3:
-                return output_size + (channels,)
+                return tuple(output_size) + (channels,)
         else:
             if len(input_shape) == 4:
                 flat = input_shape[1]
                 channels = None if flat is None else flat // patch_volume
-                return (input_shape[0], channels) + output_size
+                return (input_shape[0], channels) + tuple(output_size)
             elif len(input_shape) == 3:
                 flat = input_shape[0]
                 channels = None if flat is None else flat // patch_volume
-                return (channels,) + output_size
+                return (channels,) + tuple(output_size)
         raise ValueError(
             f"Unexpected patches rank for ReconstructPatches2D: "
             f"{len(input_shape)}"
