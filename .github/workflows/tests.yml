@@ -17,6 +17,12 @@ jobs:
       matrix:
         backend: [tensorflow, jax, torch]
 
+    # Scope KERAS_BACKEND at the job level so EVERY step that imports keras
+    # sees the right backend. Without this, `keras` defaults to tensorflow
+    # at import time and triggers a hard tf dependency in optree_impl.py.
+    env:
+      KERAS_BACKEND: ${{ matrix.backend }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +51,4 @@ jobs:
           python -c "import ${{ matrix.backend }}; print('${{ matrix.backend }}', ${{ matrix.backend }}.__version__)"
 
       - name: Run tests
-        env:
-          KERAS_BACKEND: ${{ matrix.backend }}
         run: pytest tests/ test_reconstruct_patches.py -v --tb=short
