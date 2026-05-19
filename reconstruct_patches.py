@@ -77,6 +77,36 @@ def _is_nonoverlapping(strides, size):
     return tuple(strides) == tuple(size)
 
 
+def _infer_output_size_valid(patches, size, strides, data_format):
+    """Compute output_size from patches shape for padding='valid'.
+
+    For valid padding, the inverse is deterministic:
+        output_size[i] = (grid[i] - 1) * stride[i] + size[i]
+
+    `patches.shape` must have all grid dimensions statically known.
+    """
+    data_format = backend.standardize_data_format(data_format)
+    is_3d = (len(size) == 3)
+    rank = len(patches.shape)
+    if data_format == "channels_last":
+        # batched: (B, grid..., flat); unbatched: (grid..., flat)
+        first_grid_axis = 0 if rank == len(size) + 1 else 1
+        grid = patches.shape[first_grid_axis:first_grid_axis + len(size)]
+    else:
+        # batched: (B, flat, grid...); unbatched: (flat, grid...)
+        first_grid_axis = 1 if rank == len(size) + 1 else 2
+        grid = patches.shape[first_grid_axis:first_grid_axis + len(size)]
+    if any(g is None for g in grid):
+        raise ValueError(
+            f"Cannot auto-infer output_size for valid padding: at least one "
+            f"grid dimension is unknown. patches.shape={patches.shape}. "
+            f"Pass output_size explicitly."
+        )
+    return tuple(
+        (g - 1) * s + k for g, s, k in zip(grid, strides, size)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public ops
 # ---------------------------------------------------------------------------
@@ -174,16 +204,25 @@ def _reconstruct_patches_2d(
             "Invalid `size`. Expected length 2 for 2D reconstruction. "
             f"Got: size={size}"
         )
-    if len(output_size) != 2:
-        raise ValueError(
-            "Invalid `output_size`. Expected length 2 (H, W). "
-            f"Got: output_size={output_size}"
-        )
     if padding not in ("same", "valid"):
         raise ValueError(
             f"Invalid `padding`. Expected 'same' or 'valid'. Got: {padding}"
         )
     strides = _normalize_strides(strides, size, "reconstruct_patches")
+    if output_size is None:
+        if padding != "valid":
+            raise ValueError(
+                "`output_size=None` (auto-infer) is only supported for "
+                "padding='valid'. For padding='same', the original size is "
+                "ambiguous from patches alone — please pass output_size "
+                "explicitly."
+            )
+        output_size = _infer_output_size_valid(patches, size, strides, data_format)
+    if len(output_size) != 2:
+        raise ValueError(
+            "Invalid `output_size`. Expected length 2 (H, W). "
+            f"Got: output_size={output_size}"
+        )
     data_format = backend.standardize_data_format(data_format)
 
     # Channels_first -> transpose to channels_last, compute, transpose back.
@@ -259,8 +298,8 @@ def _reconstruct_2d_nonoverlap_cl(patches, size, output_size, padding):
         if gH * pH != H or gW * pW != W:
             raise ValueError(
                 f"`padding='valid'` requires output_size to equal "
-                f"size * grid. Got output_size=({H},{W}), "
-                f"grid=({gH},{gW}), size=({pH},{pW})."
+                f"size * grid. Got output_size=({H},{W}); for grid=({gH},{gW}) "
+                f"and size=({pH},{pW}) expected output_size=({gH*pH},{gW*pW})."
             )
     return x
 
@@ -307,15 +346,18 @@ def _reconstruct_2d_overlap_cl(patches, size, output_size, strides, padding):
         op_h = H - (grid_h - 1) * sH - pH
         op_w = W - (grid_w - 1) * sW - pW
         if not (0 <= op_h < sH):
+            min_valid = (grid_h - 1) * sH + pH
             raise ValueError(
-                f"output_size H={H} is inconsistent with grid_h={grid_h}, "
-                f"stride={sH}, patch={pH}. Expected H in "
-                f"[(grid-1)*stride + patch, (grid-1)*stride + patch + stride)."
+                f"output_size H={H} is inconsistent. For grid_h={grid_h}, "
+                f"stride={sH}, patch={pH}, expected H in "
+                f"[{min_valid}, {min_valid + sH})."
             )
         if not (0 <= op_w < sW):
+            min_valid = (grid_w - 1) * sW + pW
             raise ValueError(
-                f"output_size W={W} is inconsistent with grid_w={grid_w}, "
-                f"stride={sW}, patch={pW}."
+                f"output_size W={W} is inconsistent. For grid_w={grid_w}, "
+                f"stride={sW}, patch={pW}, expected W in "
+                f"[{min_valid}, {min_valid + sW})."
             )
         output_padding = (op_h, op_w)
     else:  # same
@@ -369,16 +411,25 @@ def _reconstruct_patches_3d(
             "Invalid `size`. Expected length 3 for 3D reconstruction. "
             f"Got: size={size}"
         )
-    if len(output_size) != 3:
-        raise ValueError(
-            "Invalid `output_size`. Expected length 3 (D, H, W). "
-            f"Got: output_size={output_size}"
-        )
     if padding not in ("same", "valid"):
         raise ValueError(
             f"Invalid `padding`. Expected 'same' or 'valid'. Got: {padding}"
         )
     strides = _normalize_strides(strides, size, "reconstruct_patches_3d")
+    if output_size is None:
+        if padding != "valid":
+            raise ValueError(
+                "`output_size=None` (auto-infer) is only supported for "
+                "padding='valid'. For padding='same', the original size is "
+                "ambiguous from patches alone — please pass output_size "
+                "explicitly."
+            )
+        output_size = _infer_output_size_valid(patches, size, strides, data_format)
+    if len(output_size) != 3:
+        raise ValueError(
+            "Invalid `output_size`. Expected length 3 (D, H, W). "
+            f"Got: output_size={output_size}"
+        )
     data_format = backend.standardize_data_format(data_format)
 
     if data_format == "channels_first":
@@ -452,8 +503,9 @@ def _reconstruct_3d_nonoverlap_cl(patches, size, output_size, padding):
         if gD * pD != D or gH * pH != H or gW * pW != W:
             raise ValueError(
                 f"`padding='valid'` requires output_size to equal "
-                f"size * grid. Got output_size=({D},{H},{W}), "
-                f"grid=({gD},{gH},{gW}), size=({pD},{pH},{pW})."
+                f"size * grid. Got output_size=({D},{H},{W}); for "
+                f"grid=({gD},{gH},{gW}) and size=({pD},{pH},{pW}) expected "
+                f"output_size=({gD*pD},{gH*pH},{gW*pW})."
             )
     return x
 
@@ -493,13 +545,18 @@ def _reconstruct_3d_overlap_cl(patches, size, output_size, strides, padding):
         op_d = D - (grid_d - 1) * sD - pD
         op_h = H - (grid_h - 1) * sH - pH
         op_w = W - (grid_w - 1) * sW - pW
-        for label, op, stride in (
-            ("D", op_d, sD), ("H", op_h, sH), ("W", op_w, sW),
+        for label, op, stride, grid, patch, dim in (
+            ("D", op_d, sD, grid_d, pD, D),
+            ("H", op_h, sH, grid_h, pH, H),
+            ("W", op_w, sW, grid_w, pW, W),
         ):
             if not (0 <= op < stride):
+                min_valid = (grid - 1) * stride + patch
                 raise ValueError(
-                    f"output_size {label}={output_size} is inconsistent "
-                    f"with grid, stride, patch on the {label} axis."
+                    f"output_size {label}={dim} is inconsistent. For "
+                    f"grid_{label.lower()}={grid}, stride={stride}, "
+                    f"patch={patch}, expected {label} in "
+                    f"[{min_valid}, {min_valid + stride})."
                 )
         output_padding = (op_d, op_h, op_w)
     else:
@@ -556,7 +613,7 @@ class ReconstructPatches3D(Layer):
     def __init__(
         self,
         size,
-        output_size,
+        output_size=None,
         strides=None,
         padding="valid",
         data_format=None,
@@ -570,7 +627,14 @@ class ReconstructPatches3D(Layer):
                 f"`size` must be an int or a tuple of length 3. "
                 f"Received: size={size}"
             )
-        if len(output_size) != 3:
+        if output_size is None:
+            if padding != "valid":
+                raise ValueError(
+                    "`output_size=None` (auto-infer) is only supported for "
+                    "padding='valid'. For padding='same' the original size "
+                    "is ambiguous from patches alone."
+                )
+        elif len(output_size) != 3:
             raise ValueError(
                 f"`output_size` must be a tuple of length 3 (D, H, W). "
                 f"Received: output_size={output_size}"
@@ -583,7 +647,7 @@ class ReconstructPatches3D(Layer):
         # Eagerly validate strides (rejects gapped strides at construct time).
         _normalize_strides(strides, size, "ReconstructPatches3D")
         self.size = tuple(size)
-        self.output_size = tuple(output_size)
+        self.output_size = tuple(output_size) if output_size is not None else None
         self.strides = strides
         self.padding = padding
         self.data_format = backend.standardize_data_format(data_format)
@@ -599,27 +663,46 @@ class ReconstructPatches3D(Layer):
         )
 
     def compute_output_shape(self, input_shape):
+        patch_volume = self.size[0] * self.size[1] * self.size[2]
+        # Resolve output_size (may be auto-inferred for valid padding).
+        if self.output_size is not None:
+            output_size = self.output_size
+        else:
+            output_size = self._infer_output_size_from_shape(input_shape)
         if self.data_format == "channels_last":
             flat = input_shape[-1]
-            patch_volume = self.size[0] * self.size[1] * self.size[2]
             channels = None if flat is None else flat // patch_volume
             if len(input_shape) == 5:
-                return (input_shape[0],) + self.output_size + (channels,)
+                return (input_shape[0],) + output_size + (channels,)
             elif len(input_shape) == 4:
-                return self.output_size + (channels,)
+                return output_size + (channels,)
         else:
-            patch_volume = self.size[0] * self.size[1] * self.size[2]
             if len(input_shape) == 5:
                 flat = input_shape[1]
                 channels = None if flat is None else flat // patch_volume
-                return (input_shape[0], channels) + self.output_size
+                return (input_shape[0], channels) + output_size
             elif len(input_shape) == 4:
                 flat = input_shape[0]
                 channels = None if flat is None else flat // patch_volume
-                return (channels,) + self.output_size
+                return (channels,) + output_size
         raise ValueError(
             f"Unexpected patches rank for ReconstructPatches3D: "
             f"{len(input_shape)}"
+        )
+
+    def _infer_output_size_from_shape(self, input_shape):
+        """Compute output_size from input_shape for padding='valid'."""
+        if self.data_format == "channels_last":
+            grid = input_shape[-4:-1] if len(input_shape) == 5 else input_shape[:-1]
+        else:
+            grid = input_shape[-3:] if len(input_shape) >= 4 else input_shape[1:]
+        if any(g is None for g in grid):
+            return (None, None, None)
+        strides = self.strides if self.strides is not None else self.size
+        if isinstance(strides, int):
+            strides = (strides, strides, strides)
+        return tuple(
+            (g - 1) * s + k for g, s, k in zip(grid, strides, self.size)
         )
 
     def get_config(self):
@@ -642,7 +725,7 @@ class ReconstructPatches2D(Layer):
     def __init__(
         self,
         size,
-        output_size,
+        output_size=None,
         strides=None,
         padding="valid",
         data_format=None,
@@ -656,7 +739,14 @@ class ReconstructPatches2D(Layer):
                 f"`size` must be an int or a tuple of length 2. "
                 f"Received: size={size}"
             )
-        if len(output_size) != 2:
+        if output_size is None:
+            if padding != "valid":
+                raise ValueError(
+                    "`output_size=None` (auto-infer) is only supported for "
+                    "padding='valid'. For padding='same' the original size "
+                    "is ambiguous from patches alone."
+                )
+        elif len(output_size) != 2:
             raise ValueError(
                 f"`output_size` must be a tuple of length 2 (H, W). "
                 f"Received: output_size={output_size}"
@@ -669,7 +759,7 @@ class ReconstructPatches2D(Layer):
         # Eagerly validate strides (rejects gapped strides at construct time).
         _normalize_strides(strides, size, "ReconstructPatches2D")
         self.size = tuple(size)
-        self.output_size = tuple(output_size)
+        self.output_size = tuple(output_size) if output_size is not None else None
         self.strides = strides
         self.padding = padding
         self.data_format = backend.standardize_data_format(data_format)
@@ -685,27 +775,44 @@ class ReconstructPatches2D(Layer):
         )
 
     def compute_output_shape(self, input_shape):
+        patch_volume = self.size[0] * self.size[1]
+        if self.output_size is not None:
+            output_size = self.output_size
+        else:
+            output_size = self._infer_output_size_from_shape(input_shape)
         if self.data_format == "channels_last":
             flat = input_shape[-1]
-            patch_volume = self.size[0] * self.size[1]
             channels = None if flat is None else flat // patch_volume
             if len(input_shape) == 4:
-                return (input_shape[0],) + self.output_size + (channels,)
+                return (input_shape[0],) + output_size + (channels,)
             elif len(input_shape) == 3:
-                return self.output_size + (channels,)
+                return output_size + (channels,)
         else:
-            patch_volume = self.size[0] * self.size[1]
             if len(input_shape) == 4:
                 flat = input_shape[1]
                 channels = None if flat is None else flat // patch_volume
-                return (input_shape[0], channels) + self.output_size
+                return (input_shape[0], channels) + output_size
             elif len(input_shape) == 3:
                 flat = input_shape[0]
                 channels = None if flat is None else flat // patch_volume
-                return (channels,) + self.output_size
+                return (channels,) + output_size
         raise ValueError(
             f"Unexpected patches rank for ReconstructPatches2D: "
             f"{len(input_shape)}"
+        )
+
+    def _infer_output_size_from_shape(self, input_shape):
+        if self.data_format == "channels_last":
+            grid = input_shape[-3:-1] if len(input_shape) == 4 else input_shape[:-1]
+        else:
+            grid = input_shape[-2:] if len(input_shape) >= 3 else input_shape[1:]
+        if any(g is None for g in grid):
+            return (None, None)
+        strides = self.strides if self.strides is not None else self.size
+        if isinstance(strides, int):
+            strides = (strides, strides)
+        return tuple(
+            (g - 1) * s + k for g, s, k in zip(grid, strides, self.size)
         )
 
     def get_config(self):
