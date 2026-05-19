@@ -1,0 +1,6 @@
+# Common dependencies. Backend (tensorflow / jax / torch) is installed
+# separately in CI based on the matrix entry — see .github/workflows/tests.yml.
+# Locally, install at least one backend manually.
+keras>=3.0
+numpy>=1.23
+pytest>=7.0
