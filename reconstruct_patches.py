@@ -27,6 +27,7 @@ Dilation support: dilation_rate != 1 is not yet supported (would be a
 follow-up to handle dilated kernels in both paths).
 """
 
+import keras
 from keras import ops
 from keras.layers import Layer
 
@@ -548,6 +549,7 @@ def _reconstruct_3d_overlap_cl(patches, size, output_size, strides, padding):
 # ---------------------------------------------------------------------------
 
 @keras_export("keras.layers.ReconstructPatches3D")
+@keras.saving.register_keras_serializable(package="reconstruct_patches")
 class ReconstructPatches3D(Layer):
     """Layer wrapper for `keras.ops.image.reconstruct_patches_3d`."""
 
@@ -633,6 +635,7 @@ class ReconstructPatches3D(Layer):
 
 
 @keras_export("keras.layers.ReconstructPatches2D")
+@keras.saving.register_keras_serializable(package="reconstruct_patches")
 class ReconstructPatches2D(Layer):
     """Layer wrapper for `keras.ops.image.reconstruct_patches` (2D)."""
 
