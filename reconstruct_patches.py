@@ -120,6 +120,7 @@ def reconstruct_patches(
     padding="valid",
     data_format=None,
     reduction="mean",
+    dilation_rate=1,
 ):
     """Reconstructs image(s) or volume(s) from patches.
 
@@ -193,10 +194,12 @@ def reconstruct_patches(
 
     if not isinstance(size, int) and len(size) == 3:
         return _reconstruct_patches_3d(
-            patches, size, output_size, strides, padding, data_format, reduction,
+            patches, size, output_size, strides, padding, data_format,
+            reduction, dilation_rate,
         )
     return _reconstruct_patches_2d(
-        patches, size, output_size, strides, padding, data_format, reduction,
+        patches, size, output_size, strides, padding, data_format,
+        reduction, dilation_rate,
     )
 
 
@@ -209,6 +212,7 @@ def reconstruct_patches_3d(
     padding="valid",
     data_format=None,
     reduction="mean",
+    dilation_rate=1,
 ):
     """Reconstructs volume(s) from 3D patches. See `reconstruct_patches`.
 
@@ -235,7 +239,8 @@ def reconstruct_patches_3d(
             f"`reduction` must be 'mean' or 'sum'. Received: {reduction}"
         )
     return _reconstruct_patches_3d(
-        patches, size, output_size, strides, padding, data_format, reduction,
+        patches, size, output_size, strides, padding, data_format,
+        reduction, dilation_rate,
     )
 
 
@@ -245,7 +250,7 @@ def reconstruct_patches_3d(
 
 def _reconstruct_patches_2d(
     patches, size, output_size, strides=None, padding="valid",
-    data_format=None, reduction="mean",
+    data_format=None, reduction="mean", dilation_rate=1,
 ):
     if isinstance(size, int):
         size = (size, size)
@@ -287,29 +292,29 @@ def _reconstruct_patches_2d(
                 f"got shape {patches.shape}"
             )
         result_cl = _reconstruct_patches_2d_cl(
-            patches_cl, size, output_size, strides, padding, reduction,
+            patches_cl, size, output_size, strides, padding, reduction, dilation_rate,
         )
         if len(patches.shape) == 3:
             return ops.transpose(result_cl, axes=(2, 0, 1))
         return ops.transpose(result_cl, axes=(0, 3, 1, 2))
 
     return _reconstruct_patches_2d_cl(
-        patches, size, output_size, strides, padding, reduction,
+        patches, size, output_size, strides, padding, reduction, dilation_rate,
     )
 
 
-def _reconstruct_patches_2d_cl(patches, size, output_size, strides, padding, reduction):
+def _reconstruct_patches_2d_cl(patches, size, output_size, strides, padding, reduction, dilation_rate=1):
     """Channels_last 2D core: dispatches between non-overlap and overlap paths."""
     _unbatched = (len(patches.shape) == 3)
     if _unbatched:
         patches = ops.expand_dims(patches, axis=0)
 
-    if _is_nonoverlapping(strides, size):
-        # No overlap: reduction doesn't matter (count is 1 everywhere)
+    if _is_nonoverlapping(strides, size) and dilation_rate == 1:
+        # No overlap, no dilation: reduction doesn't matter (count is 1 everywhere)
         result = _reconstruct_2d_nonoverlap_cl(patches, size, output_size, padding)
     else:
         result = _reconstruct_2d_overlap_cl(
-            patches, size, output_size, strides, padding, reduction,
+            patches, size, output_size, strides, padding, reduction, dilation_rate,
         )
 
     if _unbatched:
@@ -355,7 +360,7 @@ def _reconstruct_2d_nonoverlap_cl(patches, size, output_size, padding):
     return x
 
 
-def _reconstruct_2d_overlap_cl(patches, size, output_size, strides, padding, reduction="mean"):
+def _reconstruct_2d_overlap_cl(patches, size, output_size, strides, padding, reduction="mean", dilation_rate=1):
     """conv-transpose path for overlapping strides, channels_last.
 
     Each overlapping output pixel gets the SUM of contributing patches; we
@@ -393,22 +398,29 @@ def _reconstruct_2d_overlap_cl(patches, size, output_size, strides, padding, red
             "`patches` must be statically known."
         )
 
+    # Effective kernel size accounting for dilation: (k - 1) * d + 1
+    if isinstance(dilation_rate, int):
+        dilation_rate = (dilation_rate, dilation_rate)
+    dH, dW = dilation_rate
+    eff_pH = (pH - 1) * dH + 1
+    eff_pW = (pW - 1) * dW + 1
+
     if padding == "valid":
-        op_h = H - (grid_h - 1) * sH - pH
-        op_w = W - (grid_w - 1) * sW - pW
+        op_h = H - (grid_h - 1) * sH - eff_pH
+        op_w = W - (grid_w - 1) * sW - eff_pW
         if not (0 <= op_h < sH):
-            min_valid = (grid_h - 1) * sH + pH
+            min_valid = (grid_h - 1) * sH + eff_pH
             raise ValueError(
                 f"output_size H={H} is inconsistent. For grid_h={grid_h}, "
-                f"stride={sH}, patch={pH}, expected H in "
-                f"[{min_valid}, {min_valid + sH})."
+                f"stride={sH}, effective_patch={eff_pH} (patch={pH}, "
+                f"dilation={dH}), expected H in [{min_valid}, {min_valid + sH})."
             )
         if not (0 <= op_w < sW):
-            min_valid = (grid_w - 1) * sW + pW
+            min_valid = (grid_w - 1) * sW + eff_pW
             raise ValueError(
                 f"output_size W={W} is inconsistent. For grid_w={grid_w}, "
-                f"stride={sW}, patch={pW}, expected W in "
-                f"[{min_valid}, {min_valid + sW})."
+                f"stride={sW}, effective_patch={eff_pW} (patch={pW}, "
+                f"dilation={dW}), expected W in [{min_valid}, {min_valid + sW})."
             )
         output_padding = (op_h, op_w)
     else:  # same
@@ -423,6 +435,7 @@ def _reconstruct_2d_overlap_cl(patches, size, output_size, strides, padding, red
         padding=padding,
         output_padding=output_padding,
         data_format="channels_last",
+        dilation_rate=dilation_rate,
     )
     if reduction == "mean":
         counts = backend.nn.conv_transpose(
@@ -432,6 +445,7 @@ def _reconstruct_2d_overlap_cl(patches, size, output_size, strides, padding, red
             padding=padding,
             output_padding=output_padding,
             data_format="channels_last",
+            dilation_rate=dilation_rate,
         )
 
     if padding == "same":
@@ -458,7 +472,7 @@ def _reconstruct_2d_overlap_cl(patches, size, output_size, strides, padding, red
 
 def _reconstruct_patches_3d(
     patches, size, output_size, strides=None, padding="valid",
-    data_format=None, reduction="mean",
+    data_format=None, reduction="mean", dilation_rate=1,
 ):
     if isinstance(size, int):
         size = (size, size, size)
@@ -499,27 +513,27 @@ def _reconstruct_patches_3d(
                 f"got shape {patches.shape}"
             )
         result_cl = _reconstruct_patches_3d_cl(
-            patches_cl, size, output_size, strides, padding, reduction,
+            patches_cl, size, output_size, strides, padding, reduction, dilation_rate,
         )
         if len(patches.shape) == 4:
             return ops.transpose(result_cl, axes=(3, 0, 1, 2))
         return ops.transpose(result_cl, axes=(0, 4, 1, 2, 3))
 
     return _reconstruct_patches_3d_cl(
-        patches, size, output_size, strides, padding, reduction,
+        patches, size, output_size, strides, padding, reduction, dilation_rate,
     )
 
 
-def _reconstruct_patches_3d_cl(patches, size, output_size, strides, padding, reduction):
+def _reconstruct_patches_3d_cl(patches, size, output_size, strides, padding, reduction, dilation_rate=1):
     _unbatched = (len(patches.shape) == 4)
     if _unbatched:
         patches = ops.expand_dims(patches, axis=0)
 
-    if _is_nonoverlapping(strides, size):
+    if _is_nonoverlapping(strides, size) and dilation_rate == 1:
         result = _reconstruct_3d_nonoverlap_cl(patches, size, output_size, padding)
     else:
         result = _reconstruct_3d_overlap_cl(
-            patches, size, output_size, strides, padding, reduction,
+            patches, size, output_size, strides, padding, reduction, dilation_rate,
         )
 
     if _unbatched:
@@ -566,7 +580,7 @@ def _reconstruct_3d_nonoverlap_cl(patches, size, output_size, padding):
     return x
 
 
-def _reconstruct_3d_overlap_cl(patches, size, output_size, strides, padding, reduction="mean"):
+def _reconstruct_3d_overlap_cl(patches, size, output_size, strides, padding, reduction="mean", dilation_rate=1):
     pD, pH, pW = size
     D, H, W = output_size
     sD, sH, sW = strides
@@ -597,21 +611,28 @@ def _reconstruct_3d_overlap_cl(patches, size, output_size, strides, padding, red
             "`patches` must be statically known."
         )
 
+    if isinstance(dilation_rate, int):
+        dilation_rate = (dilation_rate, dilation_rate, dilation_rate)
+    dD, dH, dW = dilation_rate
+    eff_pD = (pD - 1) * dD + 1
+    eff_pH = (pH - 1) * dH + 1
+    eff_pW = (pW - 1) * dW + 1
+
     if padding == "valid":
-        op_d = D - (grid_d - 1) * sD - pD
-        op_h = H - (grid_h - 1) * sH - pH
-        op_w = W - (grid_w - 1) * sW - pW
+        op_d = D - (grid_d - 1) * sD - eff_pD
+        op_h = H - (grid_h - 1) * sH - eff_pH
+        op_w = W - (grid_w - 1) * sW - eff_pW
         for label, op, stride, grid, patch, dim in (
-            ("D", op_d, sD, grid_d, pD, D),
-            ("H", op_h, sH, grid_h, pH, H),
-            ("W", op_w, sW, grid_w, pW, W),
+            ("D", op_d, sD, grid_d, eff_pD, D),
+            ("H", op_h, sH, grid_h, eff_pH, H),
+            ("W", op_w, sW, grid_w, eff_pW, W),
         ):
             if not (0 <= op < stride):
                 min_valid = (grid - 1) * stride + patch
                 raise ValueError(
                     f"output_size {label}={dim} is inconsistent. For "
                     f"grid_{label.lower()}={grid}, stride={stride}, "
-                    f"patch={patch}, expected {label} in "
+                    f"effective_patch={patch}, expected {label} in "
                     f"[{min_valid}, {min_valid + stride})."
                 )
         output_padding = (op_d, op_h, op_w)
@@ -625,6 +646,7 @@ def _reconstruct_3d_overlap_cl(patches, size, output_size, strides, padding, red
         padding=padding,
         output_padding=output_padding,
         data_format="channels_last",
+        dilation_rate=dilation_rate,
     )
     if reduction == "mean":
         counts = backend.nn.conv_transpose(
@@ -634,6 +656,7 @@ def _reconstruct_3d_overlap_cl(patches, size, output_size, strides, padding, red
             padding=padding,
             output_padding=output_padding,
             data_format="channels_last",
+            dilation_rate=dilation_rate,
         )
 
     if padding == "same":
@@ -884,6 +907,7 @@ class ReconstructPatches3D(Layer):
         padding="valid",
         data_format=None,
         reduction="mean",
+        dilation_rate=1,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -924,6 +948,7 @@ class ReconstructPatches3D(Layer):
         self.padding = padding
         self.data_format = backend.standardize_data_format(data_format)
         self.reduction = reduction
+        self.dilation_rate = dilation_rate
 
     def call(self, inputs):
         # Dual-input mode: [patches, reference_tensor]. Uses ops.shape(reference)
@@ -955,6 +980,7 @@ class ReconstructPatches3D(Layer):
             padding=self.padding,
             data_format=self.data_format,
             reduction=self.reduction,
+            dilation_rate=self.dilation_rate,
         )
 
     def compute_output_shape(self, input_shape):
@@ -1017,6 +1043,7 @@ class ReconstructPatches3D(Layer):
             "padding": self.padding,
             "data_format": self.data_format,
             "reduction": self.reduction,
+            "dilation_rate": self.dilation_rate,
         }
         return {**base_config, **config}
 
@@ -1034,6 +1061,7 @@ class ReconstructPatches2D(Layer):
         padding="valid",
         data_format=None,
         reduction="mean",
+        dilation_rate=1,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -1069,6 +1097,7 @@ class ReconstructPatches2D(Layer):
         self.padding = padding
         self.data_format = backend.standardize_data_format(data_format)
         self.reduction = reduction
+        self.dilation_rate = dilation_rate
 
     def call(self, inputs):
         if isinstance(inputs, (list, tuple)):
@@ -1094,6 +1123,7 @@ class ReconstructPatches2D(Layer):
             padding=self.padding,
             data_format=self.data_format,
             reduction=self.reduction,
+            dilation_rate=self.dilation_rate,
         )
 
     def compute_output_shape(self, input_shape):
@@ -1153,5 +1183,6 @@ class ReconstructPatches2D(Layer):
             "padding": self.padding,
             "data_format": self.data_format,
             "reduction": self.reduction,
+            "dilation_rate": self.dilation_rate,
         }
         return {**base_config, **config}
