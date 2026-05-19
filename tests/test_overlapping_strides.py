@@ -184,6 +184,11 @@ def test_3d_overlap_layer_matches_op():
 # Channels_first + overlap
 # ---------------------------------------------------------------------------
 
+@pytest.mark.skipif(
+    __import__("keras").backend.backend() == "tensorflow",
+    reason="tf.nn.conv only supports NHWC on CPU; extract_patches with "
+           "channels_first errors out on tensorflow-cpu (CI).",
+)
 def test_2d_overlap_channels_first():
     H, W, C = 16, 16, 3
     x = np.random.RandomState(0).rand(2, C, H, W).astype("float32")

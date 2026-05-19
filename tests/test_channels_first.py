@@ -4,8 +4,18 @@ Verifies that extracting and reconstructing with channels_first inputs
 produces the original tensor in channels_first layout. The implementation
 transposes to channels_last internally, runs the channels_last path, and
 transposes back — these tests prove that round-trips end-to-end.
+
+Skipped on the TensorFlow backend: `tf.nn.conv2d` and `conv3d` only support
+NHWC (channels_last) on CPU, so `keras.ops.image.extract_patches` errors
+out with `UnimplementedError` when given a channels_first input. The
+inverse layer itself supports channels_first on all backends; we just
+can't construct the forward patches needed for the roundtrip under
+tensorflow-cpu. Users running TF with a GPU build are unaffected.
 """
 
+import os
+
+import keras
 import numpy as np
 import pytest
 from keras import ops
@@ -15,6 +25,12 @@ from reconstruct_patches import (
     ReconstructPatches3D,
     reconstruct_patches,
     reconstruct_patches_3d,
+)
+
+pytestmark = pytest.mark.skipif(
+    keras.backend.backend() == "tensorflow",
+    reason="tf.nn.conv only supports NHWC on CPU; extract_patches with "
+           "channels_first raises UnimplementedError on tensorflow-cpu.",
 )
 
 
