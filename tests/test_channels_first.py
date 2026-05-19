@@ -99,7 +99,7 @@ def test_2d_channels_first_via_layer(H, W, C, size, padding):
         (8, 16, 16, 2, (4, 4, 4), "valid"),
         (16, 32, 32, 1, (4, 8, 8), "valid"),
         (8, 8, 8, 3, (2, 2, 2), "valid"),
-        (25, 59, 55, 2, (16, 32, 32), "same"),   # user's motivating shape
+        (25, 59, 55, 2, (8, 16, 16), "same"),    # user's non-divisible shape (small-patch variant for CI memory)
         (17, 33, 41, 3, (4, 8, 8), "same"),
         (1, 32, 32, 2, (4, 8, 8), "same"),       # single-slice
     ],
@@ -122,7 +122,7 @@ def test_3d_channels_first_roundtrip(D, H, W, C, size, padding):
 @pytest.mark.parametrize(
     "D,H,W,C,size,padding", [
         (8, 16, 16, 2, (4, 4, 4), "valid"),
-        (25, 59, 55, 2, (16, 32, 32), "same"),
+        (25, 59, 55, 2, (8, 16, 16), "same"),
     ],
 )
 def test_3d_channels_first_via_layer(D, H, W, C, size, padding):

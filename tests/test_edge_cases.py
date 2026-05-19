@@ -159,13 +159,19 @@ def test_vit_style_patching(size_in, patch):
 
 
 @pytest.mark.parametrize(
+    # NOTE: original medical-imaging workflows often use a (16, 32, 32) patch.
+    # The forward `extract_patches` builds an identity conv kernel of size
+    # 16*32*32*C, which under JAX allocates ~1 GB just for the kernel and OOMs
+    # the 7 GB GitHub Actions runner. We use the same realistic volume shapes
+    # but with an (8, 16, 16) patch (~16 MB kernel), which exercises the same
+    # non-divisible code path while fitting in CI memory.
     "D,H,W,pD,pH,pW", [
-        (64, 256, 256, 16, 32, 32),    # typical CT/MR chunk
-        (48, 192, 192, 16, 32, 32),
+        (64, 256, 256, 8, 16, 16),    # typical CT/MR chunk
+        (48, 192, 192, 8, 16, 16),
         (32, 128, 128, 8, 16, 16),
         # Non-divisible shapes (the original motivating use case)
-        (25, 59, 55, 16, 32, 32),
-        (40, 200, 180, 16, 32, 32),
+        (25, 59, 55, 8, 16, 16),
+        (40, 200, 180, 8, 16, 16),
     ],
 )
 def test_medical_imaging_volumes(D, H, W, pD, pH, pW):

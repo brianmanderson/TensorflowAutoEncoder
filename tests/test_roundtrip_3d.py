@@ -26,7 +26,12 @@ PATCH_SIZES_3D = [
     # symmetric
     (2, 2, 2), (3, 3, 3), (4, 4, 4), (8, 8, 8), (16, 16, 16),
     # asymmetric — common medical-imaging shapes
-    (4, 8, 8), (8, 16, 16), (16, 32, 32),
+    (4, 8, 8), (8, 16, 16),
+    # Note: (16, 32, 32) deliberately omitted. The forward `extract_patches`
+    # builds an identity kernel of shape (16, 32, 32, C, 16*32*32*C); with
+    # C=2 that's a 32768-channel kernel taking ~4 GB float32, which OOMs
+    # GitHub Actions runners (7 GB). The (8, 16, 16) entry above already
+    # exercises the asymmetric-medical-imaging code path with a 64 MB kernel.
     # general asymmetric / prime
     (3, 5, 7), (2, 4, 8),
     # degenerate (depth = 1, single-slice case)
