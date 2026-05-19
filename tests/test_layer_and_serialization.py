@@ -266,6 +266,137 @@ def test_op_channels_first_supported_3d():
     np.testing.assert_allclose(ops.convert_to_numpy(recon), x, atol=1e-6)
 
 
+# ---------------------------------------------------------------------------
+# name= keyword preservation (task #42)
+# ---------------------------------------------------------------------------
+
+
+def test_layer_2d_preserves_name():
+    layer = ReconstructPatches2D(
+        size=(4, 4), output_size=(16, 16), padding="valid", name="my_recon_2d",
+    )
+    assert layer.name == "my_recon_2d"
+    config = layer.get_config()
+    restored = ReconstructPatches2D.from_config(config)
+    assert restored.name == "my_recon_2d"
+
+
+def test_layer_3d_preserves_name():
+    layer = ReconstructPatches3D(
+        size=(4, 4, 4), output_size=(16, 16, 16), padding="valid", name="my_recon_3d",
+    )
+    assert layer.name == "my_recon_3d"
+    config = layer.get_config()
+    restored = ReconstructPatches3D.from_config(config)
+    assert restored.name == "my_recon_3d"
+
+
+# ---------------------------------------------------------------------------
+# Auto-infer output_size for padding='valid' (task #40)
+# ---------------------------------------------------------------------------
+
+
+def test_2d_output_size_auto_infer_valid_nonoverlap():
+    """output_size=None with valid padding should auto-infer at call time."""
+    H, W = 16, 16
+    x = np.random.RandomState(0).rand(2, H, W, 3).astype("float32")
+    x_t = ops.convert_to_tensor(x)
+    patches = ops.image.extract_patches(x_t, size=(4, 4), padding="valid")
+    layer = ReconstructPatches2D(size=(4, 4), padding="valid")  # no output_size
+    assert layer.output_size is None
+    recon = layer(patches)
+    np.testing.assert_allclose(ops.convert_to_numpy(recon), x, atol=1e-6)
+
+
+def test_2d_output_size_auto_infer_valid_overlap():
+    H, W = 16, 16
+    x = np.random.RandomState(1).rand(2, H, W, 3).astype("float32")
+    x_t = ops.convert_to_tensor(x)
+    patches = ops.image.extract_patches(x_t, size=(4, 4), strides=2, padding="valid")
+    layer = ReconstructPatches2D(
+        size=(4, 4), strides=(2, 2), padding="valid",  # no output_size
+    )
+    recon = layer(patches)
+    np.testing.assert_allclose(ops.convert_to_numpy(recon), x, atol=1e-5)
+
+
+def test_3d_output_size_auto_infer_valid():
+    D, H, W = 8, 16, 16
+    x = np.random.RandomState(2).rand(1, D, H, W, 2).astype("float32")
+    x_t = ops.convert_to_tensor(x)
+    patches = ops.image.extract_patches(x_t, size=(4, 4, 4), padding="valid")
+    layer = ReconstructPatches3D(size=(4, 4, 4), padding="valid")  # no output_size
+    recon = layer(patches)
+    np.testing.assert_allclose(ops.convert_to_numpy(recon), x, atol=1e-6)
+
+
+def test_output_size_none_with_same_padding_requires_reference_2d():
+    """output_size=None + padding='same' is legal at init (caller is expected
+    to pass [patches, reference] at call time to derive output_size dynamically;
+    see test_dynamic_output_size.py for that path). Single-input call without
+    output_size set would error at call time, not init."""
+    # Should not raise at construction.
+    layer = ReconstructPatches2D(size=(4, 4), padding="same")
+    assert layer.output_size is None
+    # Calling without a reference (single input) and no static output_size
+    # is an error at call time (None is unpackable but the math fails).
+    x = ops.convert_to_tensor(np.zeros((1, 4, 4, 48), dtype="float32"))
+    with pytest.raises((TypeError, ValueError)):
+        layer(x)
+
+
+def test_output_size_none_with_same_padding_requires_reference_3d():
+    layer = ReconstructPatches3D(size=(4, 4, 4), padding="same")
+    assert layer.output_size is None
+    x = ops.convert_to_tensor(np.zeros((1, 4, 4, 4, 128), dtype="float32"))
+    with pytest.raises((TypeError, ValueError)):
+        layer(x)
+
+
+def test_compute_output_shape_auto_infer():
+    """compute_output_shape should infer output_size when not given."""
+    layer = ReconstructPatches2D(size=(4, 4), padding="valid")
+    out_shape = layer.compute_output_shape((2, 4, 4, 48))  # grid 4x4, C=3
+    assert out_shape == (2, 16, 16, 3)
+
+
+# ---------------------------------------------------------------------------
+# Improved error messages for inconsistent output_size (task #41)
+# ---------------------------------------------------------------------------
+
+
+def test_error_message_includes_expected_value_2d_nonoverlap():
+    """For non-overlap valid, error suggests the right output_size."""
+    x = np.zeros((1, 4, 4, 48), dtype="float32")
+    with pytest.raises(ValueError, match=r"expected output_size=\(16,16\)"):
+        reconstruct_patches(
+            ops.convert_to_tensor(x),
+            size=(4, 4), output_size=(15, 15), padding="valid",
+        )
+
+
+def test_error_message_includes_expected_value_3d_nonoverlap():
+    x = np.zeros((1, 4, 4, 4, 128), dtype="float32")
+    with pytest.raises(ValueError, match=r"expected output_size=\(8,8,8\)"):
+        reconstruct_patches_3d(
+            ops.convert_to_tensor(x),
+            size=(2, 2, 2), output_size=(7, 7, 7), padding="valid",
+        )
+
+
+def test_error_message_includes_range_for_overlap():
+    """For overlap valid, error suggests the valid range."""
+    x = np.random.RandomState(3).rand(1, 16, 16, 3).astype("float32")
+    x_t = ops.convert_to_tensor(x)
+    patches = ops.image.extract_patches(x_t, size=(4, 4), strides=2, padding="valid")
+    # patches grid 7x7, valid output is 16; expected H in [16, 18)
+    with pytest.raises(ValueError, match=r"expected H in \[16, 18\)"):
+        reconstruct_patches(
+            patches, size=(4, 4), output_size=(20, 20),
+            strides=(2, 2), padding="valid",
+        )
+
+
 def test_op_size_inconsistent_with_patches_last_dim():
     """Patches last dim must be divisible by prod(size)."""
     # patches with last dim 47 — prime, not divisible by 4*4=16

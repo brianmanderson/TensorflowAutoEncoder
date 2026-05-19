@@ -50,5 +50,22 @@ jobs:
           python -c "import keras; print('keras', keras.__version__)"
           python -c "import ${{ matrix.backend }}; print('${{ matrix.backend }}', ${{ matrix.backend }}.__version__)"
 
-      - name: Run tests
-        run: pytest tests/ test_reconstruct_patches.py -v --tb=short
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ test_reconstruct_patches.py -v --tb=short \
+            --cov=reconstruct_patches --cov-report=term-missing \
+            --cov-report=xml
+
+      - name: Validate docstring examples
+        # Doctests on the source module — keeps `>>>` snippets honest.
+        run: pytest --doctest-modules reconstruct_patches.py -v
+
+      - name: Upload coverage XML
+        # Run only for the TF job so we don't upload three times. Useful for
+        # downstream Codecov / Coveralls integration if added later.
+        if: matrix.backend == 'tensorflow'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
