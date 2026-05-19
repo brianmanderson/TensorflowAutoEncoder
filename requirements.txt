@@ -4,3 +4,4 @@
 keras>=3.0
 numpy>=1.23
 pytest>=7.0
+pytest-cov>=4.0

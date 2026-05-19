@@ -158,6 +158,22 @@ def reconstruct_patches(
     Returns:
         Reconstructed image/volume, matching `patches`' batched-ness and
         `data_format`.
+
+    Examples:
+
+    >>> import numpy as np
+    >>> import keras
+    >>> from keras import ops
+    >>> from reconstruct_patches import reconstruct_patches
+    >>> image = np.random.rand(1, 16, 16, 3).astype("float32")
+    >>> patches = ops.image.extract_patches(image, size=(4, 4), padding="valid")
+    >>> tuple(patches.shape)
+    (1, 4, 4, 48)
+    >>> recon = reconstruct_patches(
+    ...     patches, size=(4, 4), output_size=(16, 16), padding="valid",
+    ... )
+    >>> tuple(recon.shape)
+    (1, 16, 16, 3)
     """
     if not isinstance(size, int):
         if not isinstance(size, (tuple, list)):
@@ -194,7 +210,24 @@ def reconstruct_patches_3d(
     data_format=None,
     reduction="mean",
 ):
-    """Reconstructs volume(s) from 3D patches. See `reconstruct_patches`."""
+    """Reconstructs volume(s) from 3D patches. See `reconstruct_patches`.
+
+    Examples:
+
+    >>> import numpy as np
+    >>> import keras
+    >>> from keras import ops
+    >>> from reconstruct_patches import reconstruct_patches_3d
+    >>> volume = np.random.rand(1, 8, 16, 16, 2).astype("float32")
+    >>> patches = ops.image.extract_patches_3d(volume, size=(4, 4, 4), padding="valid")
+    >>> tuple(patches.shape)
+    (1, 2, 4, 4, 128)
+    >>> recon = reconstruct_patches_3d(
+    ...     patches, size=(4, 4, 4), output_size=(8, 16, 16), padding="valid",
+    ... )
+    >>> tuple(recon.shape)
+    (1, 8, 16, 16, 2)
+    """
     if isinstance(size, int):
         size = (size, size, size)
     if reduction not in ("mean", "sum"):
@@ -705,6 +738,16 @@ class ExtractPatches2D(Layer):
     Output shape:
         4D `(batch, gH, gW, pH*pW*C)` for channels_last, or
         4D `(batch, pH*pW*C, gH, gW)` for channels_first.
+
+    Examples:
+
+    >>> import numpy as np
+    >>> from reconstruct_patches import ExtractPatches2D
+    >>> image = np.random.rand(2, 16, 16, 3).astype("float32")
+    >>> layer = ExtractPatches2D(size=(4, 4), padding="valid")
+    >>> patches = layer(image)
+    >>> tuple(patches.shape)
+    (2, 4, 4, 48)
     """
 
     def __init__(
