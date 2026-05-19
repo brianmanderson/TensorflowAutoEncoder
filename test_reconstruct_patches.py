@@ -57,9 +57,13 @@ def gradient_image(height, width, channels=1, batch=1):
 # Non-divisible cases mirror WorkingOnPatchMaker's [:, :25, :59, :55].
 RECONSTRUCT_3D_CASES = [
     # (D, H, W, C, patch_size, padding)
-    (32, 64, 64, 1, (16, 32, 32), "valid"),   # divisible
-    (32, 64, 64, 2, (16, 32, 32), "valid"),
-    (25, 59, 55, 2, (16, 32, 32), "same"),    # user's asymmetric shape
+    # Note: (16, 32, 32) patches with C=2 build a 32768^2 (~4 GB) identity
+    # kernel in keras.ops.image.extract_patches and OOM the 7 GB GitHub CI
+    # runner. Using (8, 16, 16) here exercises the same non-divisible / valid
+    # code paths with a 64x smaller kernel.
+    (16, 32, 32, 1, (8, 16, 16), "valid"),    # divisible
+    (16, 32, 32, 2, (8, 16, 16), "valid"),
+    (25, 59, 55, 2, (8, 16, 16), "same"),     # user's asymmetric shape
     (24, 48, 48, 1, (8, 16, 16), "valid"),
     (17, 33, 41, 3, (4, 8, 8), "same"),       # all dims non-divisible
     (16, 16, 16, 1, (2, 4, 8), "valid"),      # asymmetric patch
@@ -170,14 +174,18 @@ def test_roundtrip_2d_unbatched():
 # Error handling
 # ---------------------------------------------------------------------------
 
-def test_strides_not_implemented():
+def test_gapped_strides_rejected():
+    """strides > size is rejected because gaps can't be filled."""
     x = gradient_volume(16, 16, 16, 1, batch=1)
     x_t = ops.convert_to_tensor(x)
-    patches = ops.image.extract_patches(x_t, size=(4, 4, 4), padding="valid")
-    with pytest.raises(NotImplementedError, match="non-overlapping"):
+    # Forward with stride > size — valid-padding produces some output
+    patches = ops.image.extract_patches(
+        x_t, size=(4, 4, 4), strides=(8, 8, 8), padding="valid",
+    )
+    with pytest.raises(NotImplementedError, match="gapped"):
         reconstruct_patches_3d(
             patches, size=(4, 4, 4), output_size=(16, 16, 16),
-            strides=(2, 2, 2), padding="valid",
+            strides=(8, 8, 8), padding="valid",
         )
 
 

@@ -185,44 +185,85 @@ def test_layer_invalid_padding(padding):
         )
 
 
-def test_op_strides_overlap_not_implemented_2d():
+def test_op_gapped_strides_rejected_2d():
+    """strides > size leaves gaps in coverage; cannot be inverted."""
     x = np.zeros((1, 4, 4, 48), dtype="float32")
-    with pytest.raises(NotImplementedError, match="non-overlapping"):
+    with pytest.raises(NotImplementedError, match="gapped"):
         reconstruct_patches(
             ops.convert_to_tensor(x),
-            size=(4, 4), output_size=(16, 16),
-            strides=(2, 2), padding="valid",
+            size=(4, 4), output_size=(32, 32),
+            strides=(8, 8), padding="valid",
         )
 
 
-def test_op_strides_overlap_not_implemented_3d():
+def test_op_gapped_strides_rejected_3d():
     x = np.zeros((1, 4, 4, 4, 128), dtype="float32")
-    with pytest.raises(NotImplementedError, match="non-overlapping"):
+    with pytest.raises(NotImplementedError, match="gapped"):
         reconstruct_patches_3d(
             ops.convert_to_tensor(x),
-            size=(4, 4, 4), output_size=(16, 16, 16),
-            strides=(2, 2, 2), padding="valid",
+            size=(4, 4, 4), output_size=(32, 32, 32),
+            strides=(8, 8, 8), padding="valid",
         )
 
 
-def test_op_channels_first_not_implemented_2d():
-    x = np.zeros((1, 4, 4, 48), dtype="float32")
-    with pytest.raises(NotImplementedError, match="channels_first"):
-        reconstruct_patches(
-            ops.convert_to_tensor(x),
-            size=(4, 4), output_size=(16, 16),
-            padding="valid", data_format="channels_first",
-        )
+def test_op_overlapping_supported_2d():
+    """strides < size should now work (overlap path), not raise."""
+    x = np.random.RandomState(0).rand(1, 16, 16, 3).astype("float32")
+    x_t = ops.convert_to_tensor(x)
+    patches = ops.image.extract_patches(x_t, size=(4, 4), strides=2, padding="valid")
+    recon = reconstruct_patches(
+        patches, size=(4, 4), output_size=(16, 16),
+        strides=(2, 2), padding="valid",
+    )
+    np.testing.assert_allclose(ops.convert_to_numpy(recon), x, atol=1e-5)
 
 
-def test_op_channels_first_not_implemented_3d():
-    x = np.zeros((1, 4, 4, 4, 128), dtype="float32")
-    with pytest.raises(NotImplementedError, match="channels_first"):
-        reconstruct_patches_3d(
-            ops.convert_to_tensor(x),
-            size=(4, 4, 4), output_size=(16, 16, 16),
-            padding="valid", data_format="channels_first",
-        )
+def test_op_overlapping_supported_3d():
+    x = np.random.RandomState(1).rand(1, 8, 8, 8, 2).astype("float32")
+    x_t = ops.convert_to_tensor(x)
+    patches = ops.image.extract_patches(x_t, size=(4, 4, 4), strides=2, padding="valid")
+    recon = reconstruct_patches_3d(
+        patches, size=(4, 4, 4), output_size=(8, 8, 8),
+        strides=(2, 2, 2), padding="valid",
+    )
+    np.testing.assert_allclose(ops.convert_to_numpy(recon), x, atol=1e-5)
+
+
+@pytest.mark.skipif(
+    __import__("keras").backend.backend() == "tensorflow",
+    reason="tf.nn.conv only supports NHWC on CPU; extract_patches with "
+           "channels_first errors out on tensorflow-cpu (CI).",
+)
+def test_op_channels_first_supported_2d():
+    """channels_first should now work (transposes internally)."""
+    x = np.random.RandomState(2).rand(2, 3, 16, 16).astype("float32")
+    x_t = ops.convert_to_tensor(x)
+    patches = ops.image.extract_patches(
+        x_t, size=(4, 4), padding="valid", data_format="channels_first",
+    )
+    recon = reconstruct_patches(
+        patches, size=(4, 4), output_size=(16, 16),
+        padding="valid", data_format="channels_first",
+    )
+    np.testing.assert_allclose(ops.convert_to_numpy(recon), x, atol=1e-6)
+
+
+@pytest.mark.skipif(
+    __import__("keras").backend.backend() == "tensorflow",
+    reason="tf.nn.conv only supports NHWC on CPU; extract_patches with "
+           "channels_first errors out on tensorflow-cpu (CI).",
+)
+def test_op_channels_first_supported_3d():
+    x = np.random.RandomState(3).rand(1, 2, 8, 16, 16).astype("float32")
+    x_t = ops.convert_to_tensor(x)
+    patches = ops.image.extract_patches(
+        x_t, size=(4, 4, 4), padding="valid", data_format="channels_first",
+    )
+    recon = reconstruct_patches_3d(
+        patches, size=(4, 4, 4), output_size=(8, 16, 16),
+        padding="valid", data_format="channels_first",
+    )
+    np.testing.assert_allclose(ops.convert_to_numpy(recon), x, atol=1e-6)
 
 
 def test_op_size_inconsistent_with_patches_last_dim():
