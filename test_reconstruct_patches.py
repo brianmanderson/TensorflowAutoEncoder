@@ -170,14 +170,18 @@ def test_roundtrip_2d_unbatched():
 # Error handling
 # ---------------------------------------------------------------------------
 
-def test_strides_not_implemented():
+def test_gapped_strides_rejected():
+    """strides > size is rejected because gaps can't be filled."""
     x = gradient_volume(16, 16, 16, 1, batch=1)
     x_t = ops.convert_to_tensor(x)
-    patches = ops.image.extract_patches(x_t, size=(4, 4, 4), padding="valid")
-    with pytest.raises(NotImplementedError, match="non-overlapping"):
+    # Forward with stride > size — valid-padding produces some output
+    patches = ops.image.extract_patches(
+        x_t, size=(4, 4, 4), strides=(8, 8, 8), padding="valid",
+    )
+    with pytest.raises(NotImplementedError, match="gapped"):
         reconstruct_patches_3d(
             patches, size=(4, 4, 4), output_size=(16, 16, 16),
-            strides=(2, 2, 2), padding="valid",
+            strides=(8, 8, 8), padding="valid",
         )
 
 
