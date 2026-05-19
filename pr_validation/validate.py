@@ -28,6 +28,13 @@ PYTHON = sys.executable
 # - keras_tests: focused test files in the keras checkout that should pass
 # - tfw_tests: substantial-suite files in tensorflowwork that should pass
 #              (subset selected by which features the PR implements)
+# Each PR maps to (keras_checkout_tests, direct_tests) where:
+#   keras_checkout_tests = focused test files inside the keras checkout
+#                          that exercise the upstream PR's code directly
+#   direct_tests = pr_validation/direct_tests/test_pr*.py files that
+#                  import `keras.layers.X` / `keras.ops.image.X` directly
+#                  (no dependency on tensorflowwork's local prototype).
+#                  Cumulative — PR N runs direct tests for PRs 1..N.
 PR_TESTS: dict[int, tuple[list[str], list[str]]] = {
     1: (
         [
@@ -36,15 +43,7 @@ PR_TESTS: dict[int, tuple[list[str], list[str]]] = {
             "keras/src/ops/image_test.py::ImageOpsDynamicShapeTest::test_reconstruct_patches",
             "keras/src/ops/image_test.py::ImageOpsDynamicShapeTest::test_reconstruct_patches_3d",
         ],
-        # Tests covering the basic non-overlap path only.
-        [
-            "tests/test_roundtrip_2d.py::test_2d_roundtrip",
-            "tests/test_roundtrip_3d.py::test_3d_roundtrip",
-            "tests/test_edge_cases.py::test_2d_input_equals_patch",
-            "tests/test_edge_cases.py::test_3d_input_equals_patch",
-            "tests/test_edge_cases.py::test_2d_patch_size_one",
-            "tests/test_edge_cases.py::test_3d_patch_size_one",
-        ],
+        ["pr_validation/direct_tests/test_pr01_basic.py"],
     ),
     2: (
         [
@@ -53,12 +52,9 @@ PR_TESTS: dict[int, tuple[list[str], list[str]]] = {
             "keras/src/ops/image_test.py::ImageOpsDynamicShapeTest::test_reconstruct_patches",
             "keras/src/ops/image_test.py::ImageOpsDynamicShapeTest::test_reconstruct_patches_3d",
         ],
-        # PR 1 tests plus the overlap and reduction tests.
         [
-            "tests/test_roundtrip_2d.py::test_2d_roundtrip",
-            "tests/test_roundtrip_3d.py::test_3d_roundtrip",
-            "tests/test_overlapping_strides.py",
-            "tests/test_reduction.py",
+            "pr_validation/direct_tests/test_pr01_basic.py",
+            "pr_validation/direct_tests/test_pr02_overlap.py",
         ],
     ),
     3: (
@@ -66,10 +62,9 @@ PR_TESTS: dict[int, tuple[list[str], list[str]]] = {
             "keras/src/layers/reshaping/reconstruct_patches2d_test.py",
             "keras/src/layers/reshaping/reconstruct_patches3d_test.py",
         ],
-        # Add channels_first tests (auto-skipped on TF backend).
         [
-            "tests/test_roundtrip_2d.py::test_2d_roundtrip",
-            "tests/test_channels_first.py",
+            "pr_validation/direct_tests/test_pr01_basic.py",
+            "pr_validation/direct_tests/test_pr03_channels_first.py",
         ],
     ),
     4: (
@@ -77,10 +72,10 @@ PR_TESTS: dict[int, tuple[list[str], list[str]]] = {
             "keras/src/layers/reshaping/reconstruct_patches2d_test.py",
             "keras/src/layers/reshaping/reconstruct_patches3d_test.py",
         ],
-        # Adds dilation tests (auto-skipped on TF backend).
         [
-            "tests/test_overlapping_strides.py",
-            "tests/test_dilation.py",
+            "pr_validation/direct_tests/test_pr01_basic.py",
+            "pr_validation/direct_tests/test_pr02_overlap.py",
+            "pr_validation/direct_tests/test_pr04_dilation.py",
         ],
     ),
     5: (
@@ -88,9 +83,9 @@ PR_TESTS: dict[int, tuple[list[str], list[str]]] = {
             "keras/src/layers/reshaping/reconstruct_patches2d_test.py",
             "keras/src/layers/reshaping/reconstruct_patches3d_test.py",
         ],
-        # Adds auto-infer + better-errors tests (subset of layer_and_serialization).
         [
-            "tests/test_layer_and_serialization.py",
+            "pr_validation/direct_tests/test_pr01_basic.py",
+            "pr_validation/direct_tests/test_pr05_ergonomics.py",
         ],
     ),
     6: (
@@ -98,19 +93,16 @@ PR_TESTS: dict[int, tuple[list[str], list[str]]] = {
             "keras/src/layers/reshaping/extract_patches2d_test.py",
             "keras/src/layers/reshaping/extract_patches3d_test.py",
         ],
-        # Pure ExtractPatches Layer tests.
-        [
-            "tests/test_extract_layers.py",
-        ],
+        ["pr_validation/direct_tests/test_pr06_extract_layers.py"],
     ),
     7: (
         [
             "keras/src/layers/reshaping/reconstruct_patches2d_test.py",
             "keras/src/layers/reshaping/reconstruct_patches3d_test.py",
         ],
-        # Dual-input dynamic output_size.
         [
-            "tests/test_dynamic_output_size.py",
+            "pr_validation/direct_tests/test_pr01_basic.py",
+            "pr_validation/direct_tests/test_pr07_dynamic_output.py",
         ],
     ),
 }
@@ -184,14 +176,17 @@ def main() -> int:
                    help="Upstream PR number (1-7)")
     p.add_argument("--backend", choices=BACKENDS + ("all",), default="all",
                    help="Backend to validate on (default: all three)")
+    p.add_argument("--skip-direct-tests", action="store_true",
+                   help="Skip the direct_tests suite; run focused tests only.")
     p.add_argument("--skip-tensorflowwork", action="store_true",
-                   help="Skip the substantial-suite tests; focused only.")
+                   help="Alias for --skip-direct-tests (legacy flag name).")
     p.add_argument("--skip-keras-checkout", action="store_true",
                    help="Skip the focused keras-checkout tests.")
     args = p.parse_args()
 
     assert_branch_matches_pr(args.pr)
-    keras_tests, tfw_tests = PR_TESTS[args.pr]
+    keras_tests, direct_tests = PR_TESTS[args.pr]
+    skip_direct = args.skip_direct_tests or args.skip_tensorflowwork
 
     backends = BACKENDS if args.backend == "all" else (args.backend,)
     all_ok = True
@@ -208,14 +203,14 @@ def main() -> int:
             if not ok:
                 all_ok = False
                 failures.append(f"{backend}: keras-checkout tests")
-        if not args.skip_tensorflowwork:
+        if not skip_direct:
             ok = run_pytest(
-                TFW_ROOT, env, tfw_tests,
-                f"tensorflowwork substantial suite subset ({backend})",
+                TFW_ROOT, env, direct_tests,
+                f"direct_tests against installed keras ({backend})",
             )
             if not ok:
                 all_ok = False
-                failures.append(f"{backend}: tensorflowwork tests")
+                failures.append(f"{backend}: direct_tests")
 
     print()
     if all_ok:

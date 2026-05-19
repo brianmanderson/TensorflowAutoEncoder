@@ -67,13 +67,20 @@ git push -u origin pr/NN-name
 `pr_validation/validate.py` is the gate. It:
 
 1. Checks you're on the right branch (`pr/NN-*`).
-2. Pip-installs the current keras checkout (`pip install -e .` in the keras dir).
-3. Runs the keras-checkout's own tests under all three backends (TF, JAX, PyTorch).
-4. Runs a focused subset of the tensorflowwork tests against the installed keras,
-   selecting only tests for features available in this PR.
-5. Reports pass / fail per backend and per test file.
+2. Adds the keras checkout to `PYTHONPATH` so `import keras` resolves to
+   it (no pip install needed; site-packages is bypassed).
+3. Under each backend (TF, JAX, PyTorch):
+   - Runs the **focused keras-checkout tests** that live alongside the
+     upstream code.
+   - Runs the **`pr_validation/direct_tests/` suite** subset selected for
+     this PR. Direct tests import `keras.layers.X` / `keras.ops.image.X`
+     directly and use feature-detection markers
+     (`direct_tests/conftest.py`) to skip tests for features not yet
+     present in the installed keras.
+4. Reports pass / fail per backend and per suite.
 
-Exits non-zero if anything fails. Don't push if it fails.
+Exits non-zero if anything fails. Don't push if it fails. See
+`pr_validation/README.md` for more.
 
 ## What if validation fails?
 
